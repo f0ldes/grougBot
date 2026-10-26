@@ -1,0 +1,13 @@
+# Secrets (DB/RA/bot passwords) — create per machine
+.env
+
+# Reference clones of cmangos/mangos-tbc and tbc-db (the Docker build clones its own)
+server/src/
+
+# Build / extraction logs
+*.log
+
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

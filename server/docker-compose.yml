@@ -1,0 +1,93 @@
+# CMaNGOS-TBC local server. All ports are bound to 127.0.0.1 only.
+#
+#   docker compose build                     build the server image (~20-30 min first time)
+#   docker compose up -d db                  start MariaDB
+#   docker compose run --rm extract          extract client data (long: mmaps take ~1h+)
+#   docker compose run --rm dbinit           create + fill databases (wipes existing data!)
+#   docker compose up -d                     start realmd + mangosd
+#   docker attach wow-tbc-mangosd-1          server console (detach: Ctrl+P, Ctrl+Q)
+
+name: wow-tbc
+
+x-cmangos: &cmangos
+  image: wow-tbc/cmangos:latest
+  build:
+    context: .
+    args:
+      CMANGOS_COMMIT: ${CMANGOS_COMMIT}
+      TBCDB_COMMIT: ${TBCDB_COMMIT}
+      BUILD_JOBS: ${BUILD_JOBS:-8}
+
+services:
+  db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - db:/var/lib/mysql
+    ports:
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  extract:
+    <<: *cmangos
+    profiles: [setup]
+    command: ["/scripts/extract.sh"]
+    volumes:
+      - ${WOW_CLIENT_DIR}:/client:ro
+      - gamedata:/data
+
+  dbinit:
+    <<: *cmangos
+    profiles: [setup]
+    command: ["/scripts/install-db.sh"]
+    environment:
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      DB_PASSWORD: ${DB_PASSWORD}
+    depends_on:
+      db: {condition: service_healthy}
+
+  realmd:
+    <<: *cmangos
+    restart: unless-stopped
+    command: ["realmd"]
+    environment:
+      Realmd_LoginDatabaseInfo: "db;3306;mangos;${DB_PASSWORD};tbcrealmd"
+    ports:
+      - "127.0.0.1:3724:3724"
+    depends_on:
+      db: {condition: service_healthy}
+
+  mangosd:
+    <<: *cmangos
+    restart: unless-stopped
+    command: ["mangosd"]
+    stdin_open: true
+    tty: true
+    environment:
+      Mangosd_DataDir: "/data"
+      Mangosd_LoginDatabaseInfo: "db;3306;mangos;${DB_PASSWORD};tbcrealmd"
+      Mangosd_WorldDatabaseInfo: "db;3306;mangos;${DB_PASSWORD};tbcmangos"
+      Mangosd_CharacterDatabaseInfo: "db;3306;mangos;${DB_PASSWORD};tbccharacters"
+      Mangosd_LogsDatabaseInfo: "db;3306;mangos;${DB_PASSWORD};tbclogs"
+      # Remote admin console, used by tools/gm.py to run GM commands (account create etc.)
+      Mangosd_Ra_Enable: "1"
+      Mangosd_Ra_Restricted: "0"
+      # Private test server: no anticheat/Warden (a headless bot can't answer Warden scans)
+      Anticheat_Enable: "0"
+    volumes:
+      - gamedata:/data
+    ports:
+      - "127.0.0.1:8085:8085"
+      - "127.0.0.1:3443:3443"
+    depends_on:
+      db: {condition: service_healthy}
+
+volumes:
+  db:
+  gamedata:
